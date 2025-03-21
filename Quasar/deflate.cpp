@@ -2,6 +2,11 @@
 
 std::vector<unsigned char> Deflate::compressData(const std::vector<unsigned char>& data, int level) {
     z_stream stream{};
+
+    if (deflateInit(&stream, level) != Z_OK) {
+        throw std::runtime_error("Failed to initialize compression.");
+    }
+
     stream.next_in = const_cast<Bytef*>(data.data());
     stream.avail_in = data.size();
 
@@ -9,11 +14,8 @@ std::vector<unsigned char> Deflate::compressData(const std::vector<unsigned char
     stream.next_out = compressedData.data();
     stream.avail_out = compressedData.size();
 
-    if (deflateInit(&stream, level) != Z_OK) {
-        throw std::runtime_error("Failed to initialize compression.");
-    }
-
-    if (deflate(&stream, Z_FINISH) != Z_STREAM_END) {
+    int ret = deflate(&stream, Z_FINISH);
+    if (ret != Z_STREAM_END) {
         deflateEnd(&stream);
         throw std::runtime_error("Compression failed.");
     }
@@ -22,29 +24,37 @@ std::vector<unsigned char> Deflate::compressData(const std::vector<unsigned char
     deflateEnd(&stream);
 
     return compressedData;
-
 }
 
-std::vector<unsigned char> Deflate::decompressData(const std::vector<unsigned char>& compressedData, size_t originalSize) {
-    z_stream stream{};
-    stream.next_in = const_cast<Bytef*>(compressedData.data());
-    stream.avail_in = compressedData.size();
+std::vector<unsigned char> Deflate::decompressData(const std::vector<unsigned char>& compressedData, size_t chunk_size) {
+    std::vector<unsigned char> decompressedData;
 
-    std::vector<unsigned char> decompressedData(originalSize);
-    stream.next_out = decompressedData.data();
-    stream.avail_out = decompressedData.size();
+    z_stream strm{};
+    strm.next_in = const_cast<Bytef*>(compressedData.data());
+    strm.avail_in = compressedData.size();
 
-    if (inflateInit(&stream) != Z_OK) {
-        throw std::runtime_error("Failed to initialize decompression.");
+    if (inflateInit(&strm) != Z_OK) {
+        throw std::runtime_error("Failed to initialize zlib inflate.");
     }
 
-    if (inflate(&stream, Z_FINISH) != Z_STREAM_END) {
-        inflateEnd(&stream);
-        throw std::runtime_error("Decompression failed.");
-    }
+    std::vector<unsigned char> buffer(chunk_size);
+    int ret;
 
-    decompressedData.resize(stream.total_out);
-    inflateEnd(&stream);
+    do {
+        strm.next_out = buffer.data();
+        strm.avail_out = buffer.size();
 
+        ret = inflate(&strm, Z_NO_FLUSH);
+        if (ret == Z_STREAM_ERROR) {
+            inflateEnd(&strm);
+            throw std::runtime_error("Zlib inflate stream error.");
+        }
+
+        size_t bytesDecompressed = buffer.size() - strm.avail_out;
+        decompressedData.insert(decompressedData.end(), buffer.begin(), buffer.begin() + bytesDecompressed);
+
+    } while (ret != Z_STREAM_END);
+
+    inflateEnd(&strm);
     return decompressedData;
 }
