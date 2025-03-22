@@ -1,60 +1,79 @@
 #include "deflate.h"
 
-std::vector<unsigned char> Deflate::compressData(const std::vector<unsigned char>& data, int level) {
-    z_stream stream{};
+void Deflate::compressData(const std::string& inputFile, const std::string& outputFile, int level, size_t chunk_size) {
+    std::ifstream in(inputFile, std::ios::binary);
+    std::ofstream out(outputFile, std::ios::binary);
 
+    if (!in || !out) throw std::runtime_error("Failed to open files");
+
+    z_stream stream{};
     if (deflateInit(&stream, level) != Z_OK) {
         throw std::runtime_error("Failed to initialize compression.");
     }
 
-    stream.next_in = const_cast<Bytef*>(data.data());
-    stream.avail_in = data.size();
+    std::vector<unsigned char> inBuffer(chunk_size);
+    std::vector<unsigned char> outBuffer(chunk_size);
 
-    std::vector<unsigned char> compressedData(compressBound(data.size()));
-    stream.next_out = compressedData.data();
-    stream.avail_out = compressedData.size();
+    int ret;
+    do {
+        in.read(reinterpret_cast<char*>(inBuffer.data()), chunk_size);
+        stream.next_in = inBuffer.data();
+        stream.avail_in = in.gcount();
 
-    int ret = deflate(&stream, Z_FINISH);
-    if (ret != Z_STREAM_END) {
-        deflateEnd(&stream);
-        throw std::runtime_error("Compression failed.");
-    }
+        do {
+            stream.next_out = outBuffer.data();
+            stream.avail_out = outBuffer.size();
 
-    compressedData.resize(stream.total_out);
+            ret = deflate(&stream, in.eof() ? Z_FINISH : Z_NO_FLUSH);
+            if (ret == Z_STREAM_ERROR) {
+                deflateEnd(&stream);
+                throw std::runtime_error("Compression failed.");
+            }
+
+            out.write(reinterpret_cast<char*>(outBuffer.data()), chunk_size - stream.avail_out);
+
+        } while (stream.avail_out == 0);
+
+    } while (ret != Z_STREAM_END);
+
     deflateEnd(&stream);
-
-    return compressedData;
 }
 
-std::vector<unsigned char> Deflate::decompressData(const std::vector<unsigned char>& compressedData, size_t chunk_size) {
-    std::vector<unsigned char> decompressedData;
+void Deflate::decompressData(const std::string& inputFile, const std::string& outputFile, size_t chunk_size) {
+    std::ifstream in(inputFile, std::ios::binary);
+    std::ofstream out(outputFile, std::ios::binary);
+
+    if (!in || !out) throw std::runtime_error("Failed to open files");
 
     z_stream strm{};
-    strm.next_in = const_cast<Bytef*>(compressedData.data());
-    strm.avail_in = compressedData.size();
-
     if (inflateInit(&strm) != Z_OK) {
-        throw std::runtime_error("Failed to initialize zlib inflate.");
+        throw std::runtime_error("Failed to initialize decompression.");
     }
 
-    std::vector<unsigned char> buffer(chunk_size);
+    std::vector<unsigned char> inBuffer(chunk_size);
+    std::vector<unsigned char> outBuffer(chunk_size);
+
     int ret;
-
     do {
-        strm.next_out = buffer.data();
-        strm.avail_out = buffer.size();
+        in.read(reinterpret_cast<char*>(inBuffer.data()), chunk_size);
+        strm.next_in = inBuffer.data();
+        strm.avail_in = in.gcount();
 
-        ret = inflate(&strm, Z_NO_FLUSH);
-        if (ret == Z_STREAM_ERROR) {
-            inflateEnd(&strm);
-            throw std::runtime_error("Zlib inflate stream error.");
-        }
+        do {
+            strm.next_out = outBuffer.data();
+            strm.avail_out = outBuffer.size();
 
-        size_t bytesDecompressed = buffer.size() - strm.avail_out;
-        decompressedData.insert(decompressedData.end(), buffer.begin(), buffer.begin() + bytesDecompressed);
+            ret = inflate(&strm, Z_NO_FLUSH);
+            if (ret == Z_STREAM_ERROR) {
+                inflateEnd(&strm);
+                throw std::runtime_error("Decompression failed.");
+            }
+
+            out.write(reinterpret_cast<char*>(outBuffer.data()), chunk_size - strm.avail_out);
+
+        } while (strm.avail_out == 0);
 
     } while (ret != Z_STREAM_END);
 
     inflateEnd(&strm);
-    return decompressedData;
 }
